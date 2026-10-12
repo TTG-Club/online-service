@@ -127,7 +127,7 @@ public class OnlineController
                 stats.registered(),
                 stats.players(),
                 stats.total(),
-                preferenceStatsService.getStats(normalized, now)
+                stats.preferences()
         );
     }
 
@@ -140,7 +140,8 @@ public class OnlineController
                 count.guests(),
                 count.registered(),
                 count.players(),
-                count.total()
+                count.total(),
+                preferenceStatsService.getStats(siteId, now)
         );
     }
 
@@ -233,7 +234,8 @@ public class OnlineController
             long guests,
             long registered,
             long players,
-            long total
+            long total,
+            List<PreferenceStatsService.PreferencePeriodStats> preferences
     )
     {
     }

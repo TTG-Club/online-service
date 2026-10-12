@@ -132,8 +132,10 @@ class OnlineControllerTest
         when(preferenceStatsService.getStats(eq("new"), any(Instant.class))).thenReturn(preferences);
 
         OnlineController.OnlineSiteStatsResponse response = controller.siteStats("new", null);
+        OnlineController.OnlineStatsResponse allSites = controller.stats(null);
 
         assertEquals(preferences, response.preferences());
+        assertEquals(preferences, allSites.sites().getFirst().preferences());
     }
 
     @Test
