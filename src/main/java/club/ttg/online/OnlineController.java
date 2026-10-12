@@ -1,6 +1,7 @@
 package club.ttg.online;
 
 import club.ttg.online.service.OnlineUserService;
+import club.ttg.online.service.PreferenceStatsService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -20,6 +21,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 @RequiredArgsConstructor
 @RestController
@@ -28,6 +30,7 @@ import java.util.List;
 public class OnlineController
 {
     private final OnlineUserService service;
+    private final PreferenceStatsService preferenceStatsService;
     private final OnlineProperties properties;
 
     @PostMapping("/heartbeat")
@@ -49,6 +52,7 @@ public class OnlineController
                 Boolean.TRUE.equals(request.inWorld()),
                 now
         );
+        preferenceStatsService.record(siteId, request.key(), request.preferences(), now);
         OnlineUserService.OnlineCount count = service.getTotalCount(
                 Duration.ofMinutes(properties.getDefaultWindowMinutes()),
                 now
@@ -106,7 +110,8 @@ public class OnlineController
                     0,
                     0,
                     0,
-                    0
+                    0,
+                    List.of()
             );
         }
 
@@ -121,7 +126,8 @@ public class OnlineController
                 stats.guests(),
                 stats.registered(),
                 stats.players(),
-                stats.total()
+                stats.total(),
+                preferenceStatsService.getStats(normalized, now)
         );
     }
 
@@ -175,7 +181,14 @@ public class OnlineController
              * Посетитель прямо сейчас в игровом мире. Не обязателен: сайты и старые версии
              * приложения его не шлют, для них признак просто всегда снят.
              */
-            Boolean inWorld
+            Boolean inWorld,
+
+            /*
+             * Настройки отображения посетителя: тема, ширина сайта и т.п. Не обязательны:
+             * сайты, которые их не шлют, просто не попадают в статистику настроек.
+             */
+            @Size(max = 8)
+            Map<String, String> preferences
     )
     {
         public HeartbeatRequest
@@ -205,7 +218,8 @@ public class OnlineController
             long guests,
             long registered,
             long players,
-            long total
+            long total,
+            List<PreferenceStatsService.PreferencePeriodStats> preferences
     )
     {
     }

@@ -1,12 +1,14 @@
 package club.ttg.online;
 
 import club.ttg.online.service.OnlineUserService;
+import club.ttg.online.service.PreferenceStatsService;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -19,8 +21,9 @@ import static org.mockito.Mockito.when;
 class OnlineControllerTest
 {
     private final OnlineUserService service = mock(OnlineUserService.class);
+    private final PreferenceStatsService preferenceStatsService = mock(PreferenceStatsService.class);
     private final OnlineProperties properties = new OnlineProperties();
-    private final OnlineController controller = new OnlineController(service, properties);
+    private final OnlineController controller = new OnlineController(service, preferenceStatsService, properties);
 
     OnlineControllerTest()
     {
@@ -35,6 +38,7 @@ class OnlineControllerTest
                 "visitor-123",
                 null,
                 OnlineType.GUEST,
+                null,
                 null
         );
         when(service.getTotalCount(eq(Duration.ofMinutes(30)), any(Instant.class)))
@@ -64,7 +68,8 @@ class OnlineControllerTest
                 "user-42",
                 null,
                 OnlineType.REGISTERED,
-                true
+                true,
+                null
         );
         when(service.getTotalCount(eq(Duration.ofMinutes(30)), any(Instant.class)))
                 .thenReturn(new OnlineUserService.OnlineCount(0, 1, 1));
@@ -94,5 +99,48 @@ class OnlineControllerTest
         assertEquals(5, response.sites().getFirst().total());
         assertEquals(4, response.total().players());
         assertEquals(5, response.total().total());
+    }
+
+    @Test
+    void heartbeatPassesPreferencesToPreferenceStats()
+    {
+        Map<String, String> preferences = Map.of("theme", "light", "width", "default");
+        OnlineController.HeartbeatRequest request = new OnlineController.HeartbeatRequest(
+                "new",
+                "visitor-123",
+                null,
+                OnlineType.GUEST,
+                null,
+                preferences
+        );
+        when(service.getTotalCount(eq(Duration.ofMinutes(30)), any(Instant.class)))
+                .thenReturn(new OnlineUserService.OnlineCount(1, 0, 0));
+
+        controller.heartbeat(request);
+
+        verify(preferenceStatsService).record(eq("new"), eq("visitor-123"), eq(preferences), any(Instant.class));
+    }
+
+    @Test
+    void siteStatsIncludePreferences()
+    {
+        List<PreferenceStatsService.PreferencePeriodStats> preferences = List.of(
+                new PreferenceStatsService.PreferencePeriodStats(1, Map.of("theme", Map.of("dark", 7L)))
+        );
+        when(service.getCount(eq("new"), eq(Duration.ofMinutes(30)), any(Instant.class)))
+                .thenReturn(new OnlineUserService.OnlineCount(2, 3, 0));
+        when(preferenceStatsService.getStats(eq("new"), any(Instant.class))).thenReturn(preferences);
+
+        OnlineController.OnlineSiteStatsResponse response = controller.siteStats("new", null);
+
+        assertEquals(preferences, response.preferences());
+    }
+
+    @Test
+    void unknownSiteStatsHaveNoPreferences()
+    {
+        OnlineController.OnlineSiteStatsResponse response = controller.siteStats("unknown", null);
+
+        assertEquals(List.of(), response.preferences());
     }
 }

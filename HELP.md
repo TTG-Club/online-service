@@ -76,6 +76,11 @@ REGISTERED
 Optional. Send it with `type: "REGISTERED"` when a visitor has just logged in.
 The service removes this key from `online:{siteId}:guest`, so the same person is not counted as both guest and registered during the stats window.
 
+### preferences
+
+Optional. Настройки отображения посетителя, например `{"theme": "dark", "width": "wide"}`.
+Учитываются только настройки из `online.preferences.tracked`, значения — строки вида `[a-z0-9_-]`, до 32 символов.
+
 ### Response
 
 200 OK
@@ -135,8 +140,16 @@ Response:
 "siteId": "new",
 "guests": 7,
 "registered": 5,
-"total": 12
+"total": 12,
+"preferences": [
+{ "days": 1, "preferences": { "theme": { "dark": 40, "light": 12 }, "width": { "wide": 45, "default": 7 } } },
+{ "days": 7, "preferences": { ... } },
+{ "days": 30, "preferences": { ... } }
+]
 }
+
+`preferences` — уникальные посетители с каждым значением настройки за последние `days` суток (включая сегодня).
+Кто менял значение в течение периода, учтён в каждом из выбранных.
 
 ---
 
@@ -159,6 +172,11 @@ online:new:guest
 online:new:registered
 online:5e14:guest
 online:5e14:registered
+
+Статистика настроек отображения:
+
+online:{siteId}:pref:{name}:values — Set известных значений настройки (не больше `max-values`)
+online:{siteId}:pref:{name}:{yyyy-MM-dd}:{value} — HyperLogLog уникальных посетителей за сутки, живёт `retention-days + 1` дней
 
 ---
 
