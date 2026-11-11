@@ -49,7 +49,7 @@ public class OnlineProperties
         /**
          * Какие настройки отображения учитывать. Остальные из сигнала отбрасываются.
          */
-        private List<String> tracked = new ArrayList<>(List.of("theme", "width", "layout"));
+        private List<String> tracked = new ArrayList<>(List.of("theme", "width", "layout", "list"));
 
         /**
          * Сколько разных значений одной настройки запоминать, чтобы мусор не плодил ключи.
