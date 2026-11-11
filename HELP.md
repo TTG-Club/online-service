@@ -78,7 +78,7 @@ The service removes this key from `online:{siteId}:guest`, so the same person is
 
 ### preferences
 
-Optional. Настройки отображения посетителя, например `{"theme": "dark", "width": "wide"}`.
+Optional. Настройки отображения посетителя, например `{"theme": "dark", "width": "wide", "layout": "top-left"}`.
 Учитываются только настройки из `online.preferences.tracked`, значения — строки вида `[a-z0-9_-]`, до 32 символов.
 
 ### Response

@@ -52,6 +52,32 @@ class RedisPreferenceStatsServiceTest
     }
 
     @Test
+    void recordTracksSectionLayoutByDefault()
+    {
+        when(setOperations.isMember("online:new:pref:layout:values", "top-left")).thenReturn(true);
+
+        service.record("new", "visitor-1", Map.of("layout", "top-left"), NOW);
+
+        verify(hyperLogLogOperations).add("online:new:pref:layout:2026-05-09:top-left", "visitor-1");
+    }
+
+    @Test
+    void getStatsReturnsSectionLayoutUnderItsName()
+    {
+        properties.getPreferences().setPeriodsDays(List.of(1));
+        when(setOperations.members(anyString())).thenReturn(Set.of());
+        when(setOperations.members("online:new:pref:layout:values")).thenReturn(Set.of("top-left"));
+        when(hyperLogLogOperations.size("online:new:pref:layout:2026-05-09:top-left")).thenReturn(4L);
+
+        List<PreferenceStatsService.PreferencePeriodStats> stats = service.getStats("new", NOW);
+
+        assertEquals(
+                Map.of("top-left", 4L),
+                stats.getFirst().preferences().get("layout")
+        );
+    }
+
+    @Test
     void recordIgnoresUntrackedPreferencesAndInvalidValues()
     {
         service.record("new", "visitor-1", Map.of("font", "big", "theme", "Light!"), NOW);
