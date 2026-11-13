@@ -26,7 +26,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-class OnlineTokenFilterTest
+class OnlineTokenGuardTest
 {
     private static final String USAGE_BODY = """
             {"siteId":"new","feature":"dm-screen","key":"visitor-123","type":"GUEST","activeSeconds":60}
@@ -43,14 +43,15 @@ class OnlineTokenFilterTest
                     service,
                     mock(PreferenceStatsService.class),
                     usageStatsService,
-                    properties
+                    properties,
+                    new OnlineTokenGuard(properties)
             ))
-            .addFilters(new OnlineTokenFilter(properties))
             .build();
 
-    OnlineTokenFilterTest()
+    OnlineTokenGuardTest()
     {
-        properties.setAllowedSites(List.of("new"));
+        properties.setAllowedSites(List.of("new", "vttg"));
+        properties.setTokenExemptSites(List.of("vttg"));
         properties.setApiToken("secret");
         when(service.getTotalCount(any(Duration.class), any(Instant.class)))
                 .thenReturn(new OnlineUserService.OnlineCount(1, 0, 0));
@@ -87,6 +88,15 @@ class OnlineTokenFilterTest
                 .andExpect(status().isUnauthorized());
 
         verifyNothingRecorded();
+    }
+
+    @Test
+    void exemptSiteWritesWithoutToken() throws Exception
+    {
+        mockMvc.perform(json(post("/api/v1/online/heartbeat"), HEARTBEAT_BODY.replace("\"new\"", "\"vttg\"")))
+                .andExpect(status().isOk());
+
+        verify(service).heartbeat(any(), eq("vttg"), eq("visitor-123"), any(), anyBoolean(), any(Instant.class));
     }
 
     @Test

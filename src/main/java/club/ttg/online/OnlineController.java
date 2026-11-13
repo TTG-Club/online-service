@@ -11,12 +11,14 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -37,15 +39,24 @@ public class OnlineController
     private final PreferenceStatsService preferenceStatsService;
     private final UsageStatsService usageStatsService;
     private final OnlineProperties properties;
+    private final OnlineTokenGuard tokenGuard;
 
     @PostMapping("/heartbeat")
-    public ResponseEntity<HeartbeatResponse> heartbeat(@Valid @RequestBody HeartbeatRequest request)
+    public ResponseEntity<HeartbeatResponse> heartbeat(
+            @Valid @RequestBody HeartbeatRequest request,
+            @RequestHeader(value = OnlineTokenGuard.TOKEN_HEADER, required = false) String token
+    )
     {
         String siteId = normalizeSiteId(request.siteId());
 
         if (!properties.getAllowedSites().contains(siteId))
         {
             return ResponseEntity.notFound().build();
+        }
+
+        if (!tokenGuard.allows(siteId, token))
+        {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
         Instant now = Instant.now();
@@ -71,13 +82,21 @@ public class OnlineController
      * (ноль секунд) и дальше раз в минуту - с накопленным временем работы.
      */
     @PostMapping("/usage")
-    public ResponseEntity<Void> usage(@Valid @RequestBody UsageRequest request)
+    public ResponseEntity<Void> usage(
+            @Valid @RequestBody UsageRequest request,
+            @RequestHeader(value = OnlineTokenGuard.TOKEN_HEADER, required = false) String token
+    )
     {
         String siteId = normalizeSiteId(request.siteId());
 
         if (!properties.getAllowedSites().contains(siteId))
         {
             return ResponseEntity.notFound().build();
+        }
+
+        if (!tokenGuard.allows(siteId, token))
+        {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
         usageStatsService.record(siteId, request.feature(), request.key(), request.activeSeconds(), Instant.now());

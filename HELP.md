@@ -63,6 +63,9 @@ allowed-sites:
 Без верного токена запись отклоняется с `401 Unauthorized`. Пока токен не задан, проверка выключена.
 Чтение статистики (`GET /stats`) токеном не закрыто.
 
+Сайты из `online.token-exempt-sites` (`vttg`, `vttg-play`) пишут без токена: VTTG шлёт сигналы
+напрямую, не через бэк, и хранить секрет ему негде.
+
 ## Heartbeat
 
 POST /api/v1/online/heartbeat
@@ -255,6 +258,9 @@ port: 6379
 
 online:
 api-token: ${ONLINE_API_TOKEN:}
+token-exempt-sites:
+- vttg
+- vttg-play
 
 allowed-sites:
 - new

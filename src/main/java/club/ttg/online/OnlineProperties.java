@@ -24,6 +24,12 @@ public class OnlineProperties
      */
     private String apiToken = "";
 
+    /**
+     * Сайты, которым разрешено писать без токена: они шлют сигналы напрямую,
+     * не через бэк, и хранить секрет им негде.
+     */
+    private List<String> tokenExemptSites = new ArrayList<>();
+
     private long defaultWindowMinutes = 30;
     private long minWindowMinutes = 1;
     private long maxWindowMinutes = 1440;

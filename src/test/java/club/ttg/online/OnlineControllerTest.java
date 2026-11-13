@@ -38,7 +38,8 @@ class OnlineControllerTest
             service,
             preferenceStatsService,
             usageStatsService,
-            properties
+            properties,
+            new OnlineTokenGuard(properties)
     );
     private final MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
 
@@ -61,7 +62,7 @@ class OnlineControllerTest
         when(service.getTotalCount(eq(Duration.ofMinutes(30)), any(Instant.class)))
                 .thenReturn(new OnlineUserService.OnlineCount(2, 3, 0));
 
-        ResponseEntity<OnlineController.HeartbeatResponse> response = controller.heartbeat(request);
+        ResponseEntity<OnlineController.HeartbeatResponse> response = controller.heartbeat(request, null);
 
         assertEquals(200, response.getStatusCode().value());
         assertNotNull(response.getBody());
@@ -91,7 +92,7 @@ class OnlineControllerTest
         when(service.getTotalCount(eq(Duration.ofMinutes(30)), any(Instant.class)))
                 .thenReturn(new OnlineUserService.OnlineCount(0, 1, 1));
 
-        controller.heartbeat(request);
+        controller.heartbeat(request, null);
 
         verify(service).heartbeat(
                 eq(OnlineType.REGISTERED),
@@ -133,7 +134,7 @@ class OnlineControllerTest
         when(service.getTotalCount(eq(Duration.ofMinutes(30)), any(Instant.class)))
                 .thenReturn(new OnlineUserService.OnlineCount(1, 0, 0));
 
-        controller.heartbeat(request);
+        controller.heartbeat(request, null);
 
         verify(preferenceStatsService).record(eq("new"), eq("visitor-123"), eq(preferences), any(Instant.class));
     }
