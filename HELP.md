@@ -54,6 +54,15 @@ allowed-sites:
 
 # API
 
+## Межсервисный токен
+
+Записывать данные (`POST /heartbeat`, `POST /usage`) могут только бэки сайтов: они шлют общий секрет
+в заголовке `X-Online-Token`. Секрет задаётся переменной окружения `ONLINE_API_TOKEN`
+(настройка `online.api-token`) и должен совпадать с тем, что прописан у бэков сайтов.
+
+Без верного токена запись отклоняется с `401 Unauthorized`. Пока токен не задан, проверка выключена.
+Чтение статистики (`GET /stats`) токеном не закрыто.
+
 ## Heartbeat
 
 POST /api/v1/online/heartbeat
@@ -245,6 +254,8 @@ host: localhost
 port: 6379
 
 online:
+api-token: ${ONLINE_API_TOKEN:}
+
 allowed-sites:
 - new
 - 5e14

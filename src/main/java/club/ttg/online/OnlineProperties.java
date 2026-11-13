@@ -18,6 +18,12 @@ public class OnlineProperties
 {
     private List<String> allowedSites = new ArrayList<>();
 
+    /**
+     * Межсервисный токен, который бэки сайтов шлют в заголовке X-Online-Token.
+     * Пустой - проверка выключена.
+     */
+    private String apiToken = "";
+
     private long defaultWindowMinutes = 30;
     private long minWindowMinutes = 1;
     private long maxWindowMinutes = 1440;

@@ -42,6 +42,11 @@ online:
     - "vttg"
     - "vttg-play"
 
+  # Межсервисный токен: бэки сайтов шлют его в заголовке X-Online-Token при записи
+  # (heartbeat, usage). Без верного токена запись отклоняется с 401. Пока токен не задан,
+  # проверка выключена. Значение должно совпадать с ONLINE_API_TOKEN у бэков сайтов.
+  api-token: ${ONLINE_API_TOKEN:}
+
   # Значение по умолчанию для windowMinutes, если параметр не передали
   default-window-minutes: 30
 
