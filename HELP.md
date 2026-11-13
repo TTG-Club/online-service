@@ -91,6 +91,36 @@ Optional. Настройки отображения посетителя, нап
 
 ---
 
+## Работа с инструментами сайта
+
+POST /api/v1/online/usage
+
+Отметка о работе с инструментом сайта (например, «Ширма Мастера»). Сайт шлёт её при открытии
+страницы инструмента с `activeSeconds: 0` и дальше раз в минуту — с временем работы,
+накопленным с прошлой отметки.
+
+### Request
+
+{
+"siteId": "new",
+"feature": "dm-screen",
+"key": "visitor-or-user-id",
+"type": "REGISTERED",
+"activeSeconds": 60
+}
+
+- `feature` — строка вида `[a-z0-9_-]`, до 32 символов. Учитываются только инструменты из `online.usage.tracked`, отметки по остальным молча отбрасываются.
+- `type` — `GUEST` или `REGISTERED`, на подсчёт не влияет.
+- `activeSeconds` — целое от 0 до 300. Ноль значит «открыл страницу».
+
+### Response
+
+204 No Content
+
+400 — некорректное тело, 404 — сайт не из `allowed-sites`.
+
+---
+
 # Получение статистики
 
 ## Общая статистика
@@ -145,13 +175,30 @@ Response:
 { "days": 1, "preferences": { "theme": { "dark": 40, "light": 12 }, "width": { "wide": 45, "default": 7 } } },
 { "days": 7, "preferences": { ... } },
 { "days": 30, "preferences": { ... } }
+],
+"usage": [
+{ "feature": "dm-screen", "periods": [
+{ "days": 1, "visitors": 40, "users": 18, "returning": 0, "activeDays": 18, "activeMinutes": 1340 },
+{ "days": 7, "visitors": 120, "users": 51, "returning": 22, "activeDays": 96, "activeMinutes": 8120 },
+{ "days": 30, "visitors": 300, "users": 110, "returning": 47, "activeDays": 260, "activeMinutes": 21500 }
+] }
 ]
 }
 
-Тот же `preferences` есть у каждого сайта в общей статистике `GET /api/v1/online/stats`.
+Те же `preferences` и `usage` есть у каждого сайта в общей статистике `GET /api/v1/online/stats`.
 
 `preferences` — уникальные посетители с каждым значением настройки за последние `days` суток (включая сегодня).
 Кто менял значение в течение периода, учтён в каждом из выбранных.
+
+`usage` — работа с инструментами сайта за последние `days` суток (включая сегодня). Каждый инструмент
+из `online.usage.tracked` есть в ответе всегда, даже с нулями. «Засчитанный день» посетителя — день,
+в который он набрал не меньше `online.usage.min-active-seconds` секунд работы.
+
+- `visitors` — сколько разных посетителей открывали инструмент;
+- `users` — сколько из них имеют хотя бы один засчитанный день;
+- `returning` — сколько имеют два и более засчитанных дня;
+- `activeDays` — сколько всего засчитанных дней, сумма по посетителям;
+- `activeMinutes` — сколько минут набрано за засчитанные дни, с округлением вниз.
 
 ---
 
@@ -179,6 +226,10 @@ online:5e14:registered
 
 online:{siteId}:pref:{name}:values — Set известных значений настройки (не больше `max-values`)
 online:{siteId}:pref:{name}:{yyyy-MM-dd}:{value} — HyperLogLog уникальных посетителей за сутки, живёт `retention-days + 1` дней
+
+Работа с инструментами сайта:
+
+online:{siteId}:usage:{feature}:{yyyy-MM-dd} — Hash «посетитель → секунды работы за сутки», живёт `retention-days + 1` дней
 
 ---
 

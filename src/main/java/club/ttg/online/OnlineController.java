@@ -2,8 +2,12 @@ package club.ttg.online;
 
 import club.ttg.online.service.OnlineUserService;
 import club.ttg.online.service.PreferenceStatsService;
+import club.ttg.online.service.UsageStatsService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +35,7 @@ public class OnlineController
 {
     private final OnlineUserService service;
     private final PreferenceStatsService preferenceStatsService;
+    private final UsageStatsService usageStatsService;
     private final OnlineProperties properties;
 
     @PostMapping("/heartbeat")
@@ -59,6 +64,25 @@ public class OnlineController
         );
 
         return ResponseEntity.ok(new HeartbeatResponse(count.total()));
+    }
+
+    /**
+     * Отметка о работе с инструментом сайта. Сайт шлёт её при открытии страницы инструмента
+     * (ноль секунд) и дальше раз в минуту - с накопленным временем работы.
+     */
+    @PostMapping("/usage")
+    public ResponseEntity<Void> usage(@Valid @RequestBody UsageRequest request)
+    {
+        String siteId = normalizeSiteId(request.siteId());
+
+        if (!properties.getAllowedSites().contains(siteId))
+        {
+            return ResponseEntity.notFound().build();
+        }
+
+        usageStatsService.record(siteId, request.feature(), request.key(), request.activeSeconds(), Instant.now());
+
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/stats")
@@ -111,6 +135,7 @@ public class OnlineController
                     0,
                     0,
                     0,
+                    List.of(),
                     List.of()
             );
         }
@@ -127,7 +152,8 @@ public class OnlineController
                 stats.registered(),
                 stats.players(),
                 stats.total(),
-                stats.preferences()
+                stats.preferences(),
+                stats.usage()
         );
     }
 
@@ -141,7 +167,8 @@ public class OnlineController
                 count.registered(),
                 count.players(),
                 count.total(),
-                preferenceStatsService.getStats(siteId, now)
+                preferenceStatsService.getStats(siteId, now),
+                usageStatsService.getStats(siteId, now)
         );
     }
 
@@ -201,6 +228,41 @@ public class OnlineController
         }
     }
 
+    public record UsageRequest(
+            @NotBlank
+            @Size(max = 32)
+            @Pattern(regexp = "^[a-z0-9][a-z0-9_-]*$")
+            String siteId,
+
+            /*
+             * Инструмент сайта, например "dm-screen". Учитываются только инструменты из
+             * настройки online.usage.tracked, отметки по остальным отбрасываются.
+             */
+            @NotBlank
+            @Pattern(regexp = "^[a-z0-9][a-z0-9_-]{0,31}$")
+            String feature,
+
+            @NotBlank
+            @Size(max = 128)
+            String key,
+
+            /*
+             * На подсчёт не влияет: и гость, и зарегистрированный считаются одинаково.
+             */
+            @NotNull
+            OnlineType type,
+
+            /*
+             * Сколько секунд работы накопилось с прошлой отметки. Ноль - «открыл страницу».
+             */
+            @NotNull
+            @Min(0)
+            @Max(300)
+            Integer activeSeconds
+    )
+    {
+    }
+
     public record HeartbeatResponse(long total)
     {
     }
@@ -220,7 +282,8 @@ public class OnlineController
             long registered,
             long players,
             long total,
-            List<PreferenceStatsService.PreferencePeriodStats> preferences
+            List<PreferenceStatsService.PreferencePeriodStats> preferences,
+            List<UsageStatsService.FeatureUsageStats> usage
     )
     {
     }
@@ -235,7 +298,8 @@ public class OnlineController
             long registered,
             long players,
             long total,
-            List<PreferenceStatsService.PreferencePeriodStats> preferences
+            List<PreferenceStatsService.PreferencePeriodStats> preferences,
+            List<UsageStatsService.FeatureUsageStats> usage
     )
     {
     }

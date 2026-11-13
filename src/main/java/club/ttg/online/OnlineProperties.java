@@ -25,6 +25,7 @@ public class OnlineProperties
     private Redis redis = new Redis();
     private Cors cors = new Cors();
     private Preferences preferences = new Preferences();
+    private Usage usage = new Usage();
 
     @Getter
     @Setter
@@ -58,6 +59,36 @@ public class OnlineProperties
 
         /**
          * Сколько дней хранить дневные счётчики.
+         */
+        private int retentionDays = 30;
+
+        /**
+         * Периоды в днях, за которые отдавать статистику.
+         */
+        private List<Integer> periodsDays = new ArrayList<>(List.of(1, 7, 30));
+
+        /**
+         * Часовой пояс, по которому режутся сутки.
+         */
+        private ZoneId zone = ZoneId.of("Europe/Moscow");
+    }
+
+    @Getter
+    @Setter
+    public static class Usage
+    {
+        /**
+         * Какие инструменты сайта учитывать. Отметки по остальным отбрасываются.
+         */
+        private List<String> tracked = new ArrayList<>(List.of("dm-screen"));
+
+        /**
+         * Сколько секунд работы с инструментом за день делают этот день «засчитанным».
+         */
+        private int minActiveSeconds = 300;
+
+        /**
+         * Сколько дней хранить дневные записи.
          */
         private int retentionDays = 30;
 
