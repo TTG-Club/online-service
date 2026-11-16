@@ -1,5 +1,6 @@
 package club.ttg.online;
 
+import club.ttg.online.service.HistoryService;
 import club.ttg.online.service.OnlineUserService;
 import club.ttg.online.service.PreferenceStatsService;
 import club.ttg.online.service.UsageStatsService;
@@ -25,7 +26,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class OnlineControllerTest
@@ -34,10 +37,12 @@ class OnlineControllerTest
     private final PreferenceStatsService preferenceStatsService = mock(PreferenceStatsService.class);
     private final OnlineProperties properties = new OnlineProperties();
     private final UsageStatsService usageStatsService = mock(UsageStatsService.class);
+    private final HistoryService historyService = mock(HistoryService.class);
     private final OnlineController controller = new OnlineController(
             service,
             preferenceStatsService,
             usageStatsService,
+            historyService,
             properties,
             new OnlineTokenGuard(properties)
     );
@@ -238,6 +243,49 @@ class OnlineControllerTest
         OnlineController.OnlineSiteStatsResponse response = controller.siteStats("unknown", null);
 
         assertEquals(List.of(), response.usage());
+    }
+
+    @Test
+    void heartbeatRecordsVisitInHistory()
+    {
+        OnlineController.HeartbeatRequest request = new OnlineController.HeartbeatRequest(
+                "new", "user-7", null, OnlineType.REGISTERED, null, null
+        );
+        when(service.getTotalCount(any(Duration.class), any(Instant.class)))
+                .thenReturn(new OnlineUserService.OnlineCount(0, 1, 0));
+
+        controller.heartbeat(request, null);
+
+        verify(historyService).recordVisit(eq("new"), eq(OnlineType.REGISTERED), eq("user-7"), any(Instant.class));
+    }
+
+    @Test
+    void historyDefaultsToThirtyDaysAndKeepsNullsInJson() throws Exception
+    {
+        HistoryService.HistoryDay empty = HistoryService.HistoryDay.empty("2026-11-16");
+        when(historyService.getHistory(eq(30), any(Instant.class))).thenReturn(new HistoryService.History(
+                "Europe/Moscow",
+                "2026-11-16",
+                "2026-11-16",
+                new HistoryService.Series(List.of(empty)),
+                List.of(new HistoryService.SiteSeries("new", List.of(empty)))
+        ));
+
+        mockMvc.perform(get("/api/v1/online/history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.zone").value("Europe/Moscow"))
+                .andExpect(jsonPath("$.total.days[0].date").value("2026-11-16"))
+                .andExpect(jsonPath("$.total.days[0].visitors").isEmpty())
+                .andExpect(jsonPath("$.total.days[0].peakAt").hasJsonPath())
+                .andExpect(jsonPath("$.sites[0].siteId").value("new"));
+    }
+
+    @Test
+    void historyPassesRequestedDays() throws Exception
+    {
+        mockMvc.perform(get("/api/v1/online/history").param("days", "90"));
+
+        verify(historyService).getHistory(eq(90), any(Instant.class));
     }
 
     private ResultActions postUsage(String body) throws Exception

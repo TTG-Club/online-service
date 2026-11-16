@@ -1,5 +1,6 @@
 package club.ttg.online;
 
+import club.ttg.online.service.HistoryService;
 import club.ttg.online.service.OnlineUserService;
 import club.ttg.online.service.PreferenceStatsService;
 import club.ttg.online.service.UsageStatsService;
@@ -38,6 +39,7 @@ public class OnlineController
     private final OnlineUserService service;
     private final PreferenceStatsService preferenceStatsService;
     private final UsageStatsService usageStatsService;
+    private final HistoryService historyService;
     private final OnlineProperties properties;
     private final OnlineTokenGuard tokenGuard;
 
@@ -68,6 +70,7 @@ public class OnlineController
                 Boolean.TRUE.equals(request.inWorld()),
                 now
         );
+        historyService.recordVisit(siteId, request.type(), request.key(), now);
         preferenceStatsService.record(siteId, request.key(), request.preferences(), now);
         OnlineUserService.OnlineCount count = service.getTotalCount(
                 Duration.ofMinutes(properties.getDefaultWindowMinutes()),
@@ -174,6 +177,16 @@ public class OnlineController
                 stats.preferences(),
                 stats.usage()
         );
+    }
+
+    /**
+     * История посещаемости по суткам за последние {@code days} дней, включая сегодня.
+     * {@code days} обрезается до 1..online.history.max-days.
+     */
+    @GetMapping("/history")
+    public HistoryService.History history(@RequestParam(defaultValue = "30") int days)
+    {
+        return historyService.getHistory(days, Instant.now());
     }
 
     private OnlineSiteStats buildSiteStats(String siteId, Duration window, Instant now)

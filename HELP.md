@@ -214,6 +214,38 @@ Response:
 
 ---
 
+## История посещаемости по суткам
+
+GET /api/v1/online/history?days=30
+
+`days` — от 1 до `online.history.max-days` (365), по умолчанию 30; вне диапазона обрезается.
+Токен не нужен. Сутки режутся по `online.history.zone` (Europe/Moscow).
+
+Response:
+
+{
+"zone": "Europe/Moscow",
+"from": "2026-10-18",
+"to": "2026-11-16",
+"total": { "days": [ HistoryDay, ... ] },
+"sites": [ { "siteId": "5e14", "days": [ HistoryDay, ... ] }, ... ]
+}
+
+HistoryDay:
+
+{ "date": "2026-11-16", "visitors": 812, "guests": 700, "registered": 112,
+"peakOnline": 41, "peakAt": "2026-11-16T21:35:00+03:00", "averageOnline": 17.3, "peakPlayers": 3 }
+
+- В `days` — каждый день периода от старого к новому, последний — сегодняшний (неполный).
+- День, за который ничего не записано, — с датой и `null` во всех остальных полях.
+  Если посетители были, а замеров онлайна ещё нет, `null` только в полях пика и среднего.
+- `visitors` — уникальные за сутки (гость, вошедший в течение дня, есть и в `guests`, и в
+  `registered`, но в `visitors` — один раз). В `total` — объединение по всем сайтам, а не сумма.
+- `peakOnline`, `averageOnline`, `peakPlayers` — по замерам онлайна раз в
+  `online.history.sample-interval` (5 мин) в окне `default-window-minutes`.
+
+---
+
 # Redis структура
 
 Используются Sorted Sets:
@@ -333,3 +365,11 @@ mvn spring-boot:run
 
 mvn clean package
 java -jar target/online.jar
+
+История по суткам (живёт `online.history.retention-days`, 400 дней):
+
+online:{siteId}:history:{yyyy-MM-dd}:visitors:guest — HyperLogLog гостей за сутки
+online:{siteId}:history:{yyyy-MM-dd}:visitors:registered — HyperLogLog вошедших за сутки
+online:{siteId}:history:{yyyy-MM-dd} — Hash замеров: peak, peakAt, peakPlayers, sum, samples
+online:all:history:{yyyy-MM-dd} — тот же Hash по сумме всех сайтов
+online:history:sample-lock:{номер интервала} — замок, чтобы замер за интервал делала одна копия сервиса

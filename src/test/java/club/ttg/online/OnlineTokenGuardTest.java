@@ -1,5 +1,6 @@
 package club.ttg.online;
 
+import club.ttg.online.service.HistoryService;
 import club.ttg.online.service.OnlineUserService;
 import club.ttg.online.service.PreferenceStatsService;
 import club.ttg.online.service.UsageStatsService;
@@ -43,6 +44,7 @@ class OnlineTokenGuardTest
                     service,
                     mock(PreferenceStatsService.class),
                     usageStatsService,
+                    mock(HistoryService.class),
                     properties,
                     new OnlineTokenGuard(properties)
             ))

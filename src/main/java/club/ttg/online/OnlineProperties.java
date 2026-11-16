@@ -38,6 +38,7 @@ public class OnlineProperties
     private Cors cors = new Cors();
     private Preferences preferences = new Preferences();
     private Usage usage = new Usage();
+    private History history = new History();
 
     @Getter
     @Setter
@@ -108,6 +109,31 @@ public class OnlineProperties
          * Периоды в днях, за которые отдавать статистику.
          */
         private List<Integer> periodsDays = new ArrayList<>(List.of(1, 7, 30));
+
+        /**
+         * Часовой пояс, по которому режутся сутки.
+         */
+        private ZoneId zone = ZoneId.of("Europe/Moscow");
+    }
+
+    @Getter
+    @Setter
+    public static class History
+    {
+        /**
+         * Как часто снимать текущий онлайн для пика и среднего за сутки.
+         */
+        private Duration sampleInterval = Duration.ofMinutes(5);
+
+        /**
+         * Сколько дней хранить дневные записи истории.
+         */
+        private int retentionDays = 400;
+
+        /**
+         * Сколько дней истории можно запросить за раз.
+         */
+        private int maxDays = 365;
 
         /**
          * Часовой пояс, по которому режутся сутки.
