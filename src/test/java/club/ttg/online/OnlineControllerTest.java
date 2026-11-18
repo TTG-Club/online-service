@@ -249,14 +249,16 @@ class OnlineControllerTest
     void heartbeatRecordsVisitInHistory()
     {
         OnlineController.HeartbeatRequest request = new OnlineController.HeartbeatRequest(
-                "new", "user-7", null, OnlineType.REGISTERED, null, null
+                "new", "user-7", "guest-7", OnlineType.REGISTERED, null, null
         );
         when(service.getTotalCount(any(Duration.class), any(Instant.class)))
                 .thenReturn(new OnlineUserService.OnlineCount(0, 1, 0));
 
         controller.heartbeat(request, null);
 
-        verify(historyService).recordVisit(eq("new"), eq(OnlineType.REGISTERED), eq("user-7"), any(Instant.class));
+        verify(historyService).recordVisit(
+                eq("new"), eq(OnlineType.REGISTERED), eq("user-7"), eq("guest-7"), any(Instant.class)
+        );
     }
 
     @Test

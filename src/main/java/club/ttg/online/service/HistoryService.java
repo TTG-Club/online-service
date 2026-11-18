@@ -17,8 +17,11 @@ public interface HistoryService
 
     /**
      * Запоминает посетителя в дневном счётчике уникальных.
+     *
+     * @param previousGuestKey под каким ключом вошедший заходил гостем; после входа он
+     *                         перестаёт считаться гостем за эти сутки
      */
-    void recordVisit(String siteId, OnlineType type, String visitorKey, Instant now);
+    void recordVisit(String siteId, OnlineType type, String visitorKey, String previousGuestKey, Instant now);
 
     /**
      * Снимает текущий онлайн по каждому сайту и по всем вместе. Если сервис запущен в

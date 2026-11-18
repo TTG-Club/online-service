@@ -70,7 +70,7 @@ public class OnlineController
                 Boolean.TRUE.equals(request.inWorld()),
                 now
         );
-        historyService.recordVisit(siteId, request.type(), request.key(), now);
+        historyService.recordVisit(siteId, request.type(), request.key(), request.previousGuestKey(), now);
         preferenceStatsService.record(siteId, request.key(), request.preferences(), now);
         OnlineUserService.OnlineCount count = service.getTotalCount(
                 Duration.ofMinutes(properties.getDefaultWindowMinutes()),

@@ -29,6 +29,19 @@ public class RedisHistoryService implements HistoryService
     static final String FIELD_PEAK_PLAYERS = "peakPlayers";
     static final String FIELD_SUM = "sum";
     static final String FIELD_SAMPLES = "samples";
+    static final String FIELD_VISITORS = "visitors";
+    static final String FIELD_GUESTS = "guests";
+    static final String FIELD_REGISTERED = "registered";
+
+    private static final String PEOPLE_GUESTS = "guest";
+    private static final String PEOPLE_REGISTERED = "registered";
+    private static final String PEOPLE_LINKED = "linked";
+
+    /**
+     * Сколько живут точные списки посетителей суток. Их итог переносится в хеш дня на
+     * следующие сутки, списки нужны только до этого переноса - запас на простой сервиса.
+     */
+    static final Duration PEOPLE_TTL = Duration.ofDays(3);
 
     /**
      * Один замер дня одной командой: несколько копий сервиса не перетрут пик друг друга.
@@ -54,23 +67,134 @@ public class RedisHistoryService implements HistoryService
             Long.class
     );
 
+    /**
+     * Посетитель суток. Гость, вошедший в аккаунт, вычёркивается из гостей и запоминается
+     * среди вошедших: если он потом выйдет, гостем за эти сутки уже не станет.
+     * KEYS: гости, вошедшие, гостевые ключи вошедших; ARGV: тип, ключ, прежний гостевой
+     * ключ (пустая строка, если его нет), TTL в секундах.
+     */
+    static final RedisScript<Long> VISIT_SCRIPT = new DefaultRedisScript<>(
+            """
+            if ARGV[1] == 'REGISTERED' then
+              redis.call('SADD', KEYS[2], ARGV[2])
+              if ARGV[3] ~= '' then
+                redis.call('SREM', KEYS[1], ARGV[3])
+                redis.call('SADD', KEYS[3], ARGV[3])
+              end
+            elseif redis.call('SISMEMBER', KEYS[3], ARGV[2]) == 0 then
+              redis.call('SADD', KEYS[1], ARGV[2])
+            end
+            for i = 1, 3 do
+              redis.call('EXPIRE', KEYS[i], ARGV[4])
+            end
+            return 1
+            """,
+            Long.class
+    );
+
+    /**
+     * Объединение списков нескольких сайтов: один человек на двух сайтах - один посетитель.
+     * Ключи гостей - случайные идентификаторы, вошедших - логины, поэтому эти множества
+     * не пересекаются и посетители - это просто их сумма.
+     */
+    private static final String UNION_FUNCTION = """
+            local function countUnion(first, last)
+              local seen, total = {}, 0
+              for i = first, last do
+                for _, member in ipairs(redis.call('SMEMBERS', KEYS[i])) do
+                  if not seen[member] then
+                    seen[member] = true
+                    total = total + 1
+                  end
+                end
+              end
+              return total
+            end
+            """;
+
+    /**
+     * Посетители суток по точным спискам. KEYS: гости сайтов, затем вошедшие сайтов;
+     * ARGV[1] - число сайтов. Ответ: посетители, гости, вошедшие.
+     */
+    @SuppressWarnings("rawtypes")
+    static final RedisScript<List> COUNT_SCRIPT = new DefaultRedisScript<>(
+            UNION_FUNCTION + """
+            local n = tonumber(ARGV[1])
+            local guests = countUnion(1, n)
+            local registered = countUnion(n + 1, 2 * n)
+            return {guests + registered, guests, registered}
+            """,
+            List.class
+    );
+
+    /**
+     * Переносит итог прошедших суток из списков в хеши дня и удаляет списки: держать их
+     * все дни хранения истории слишком дорого. Повторный вызов только дочищает списки.
+     * KEYS: хеш дня всех сайтов, хеши дня сайтов, гости сайтов, вошедшие сайтов, гостевые
+     * ключи вошедших по сайтам; ARGV: число сайтов, TTL хешей в секундах.
+     */
+    static final RedisScript<Long> FINALIZE_SCRIPT = new DefaultRedisScript<>(
+            UNION_FUNCTION + """
+            local n = tonumber(ARGV[1])
+            local hasPeople = false
+            for i = n + 2, #KEYS do
+              if redis.call('EXISTS', KEYS[i]) == 1 then
+                hasPeople = true
+              end
+            end
+            if not hasPeople then
+              return 0
+            end
+            if redis.call('HEXISTS', KEYS[1], 'visitors') == 0 then
+              for i = 1, n do
+                local guests = redis.call('SCARD', KEYS[1 + n + i])
+                local registered = redis.call('SCARD', KEYS[1 + 2 * n + i])
+                redis.call('HSET', KEYS[1 + i],
+                  'visitors', guests + registered, 'guests', guests, 'registered', registered)
+                redis.call('EXPIRE', KEYS[1 + i], ARGV[2])
+              end
+              local guests = countUnion(n + 2, 2 * n + 1)
+              local registered = countUnion(2 * n + 2, 3 * n + 1)
+              redis.call('HSET', KEYS[1],
+                'visitors', guests + registered, 'guests', guests, 'registered', registered)
+              redis.call('EXPIRE', KEYS[1], ARGV[2])
+            end
+            for i = n + 2, #KEYS do
+              redis.call('DEL', KEYS[i])
+            end
+            return 1
+            """,
+            Long.class
+    );
+
     private final StringRedisTemplate redisTemplate;
     private final OnlineUserService onlineUserService;
     private final OnlineProperties properties;
 
     @Override
-    public void recordVisit(String siteId, OnlineType type, String visitorKey, Instant now)
+    public void recordVisit(String siteId, OnlineType type, String visitorKey, String previousGuestKey, Instant now)
     {
         Objects.requireNonNull(siteId, "siteId");
         Objects.requireNonNull(type, "type");
         Objects.requireNonNull(visitorKey, "visitorKey");
         Objects.requireNonNull(now, "now");
 
-        String key = visitorsKey(siteId, today(now), type);
+        LocalDate day = today(now);
+        String previous = (previousGuestKey == null || previousGuestKey.isBlank()) ? "" : previousGuestKey;
 
-        // HyperLogLog: уникальные посетители за день в фиксированных ~12 КБ на ключ.
-        redisTemplate.opsForHyperLogLog().add(key, visitorKey);
-        redisTemplate.expire(key, retention());
+        // Точные списки, а не HyperLogLog: из HyperLogLog нельзя вычеркнуть гостя, который вошёл.
+        redisTemplate.execute(
+                VISIT_SCRIPT,
+                List.of(
+                        peopleKey(siteId, day, PEOPLE_GUESTS),
+                        peopleKey(siteId, day, PEOPLE_REGISTERED),
+                        peopleKey(siteId, day, PEOPLE_LINKED)
+                ),
+                type.name(),
+                visitorKey,
+                previous,
+                String.valueOf(PEOPLE_TTL.toSeconds())
+        );
     }
 
     @Override
@@ -102,6 +226,12 @@ public class RedisHistoryService implements HistoryService
 
         writeSample(ALL_SITES, day, totalOnline, totalPlayers, sampledAt, ttlSeconds);
 
+        // Списки живут несколько суток - дочищаем всё, что сервис мог пропустить, пока стоял.
+        for (long back = 1; back < PEOPLE_TTL.toDays(); back++)
+        {
+            finalizeDay(day.minusDays(back), ttlSeconds);
+        }
+
         return true;
     }
 
@@ -114,15 +244,16 @@ public class RedisHistoryService implements HistoryService
         LocalDate to = today(now);
         LocalDate from = to.minusDays(clamped - 1L);
         List<LocalDate> period = from.datesUntil(to.plusDays(1)).toList();
-        List<String> sites = properties.getAllowedSites().stream().sorted().toList();
+        List<String> sites = sortedSites();
+        LocalDate oldestPeople = to.minusDays(PEOPLE_TTL.toDays());
 
         List<HistoryDay> totalDays = period.stream()
-                .map(day -> buildDay(ALL_SITES, sites, day))
+                .map(day -> buildDay(ALL_SITES, sites, day, oldestPeople))
                 .toList();
         List<SiteSeries> siteSeries = sites.stream()
                 .map(siteId -> new SiteSeries(
                         siteId,
-                        period.stream().map(day -> buildDay(siteId, List.of(siteId), day)).toList()
+                        period.stream().map(day -> buildDay(siteId, List.of(siteId), day, oldestPeople)).toList()
                 ))
                 .toList();
 
@@ -130,51 +261,98 @@ public class RedisHistoryService implements HistoryService
     }
 
     /**
-     * @param hashSiteId    чей хеш замеров читать
+     * @param hashSiteId    чей хеш дня читать
      * @param visitorSites  по каким сайтам объединять уникальных посетителей
+     * @param oldestPeople  раньше этого дня точных списков уже нет
      */
-    private HistoryDay buildDay(String hashSiteId, List<String> visitorSites, LocalDate day)
+    private HistoryDay buildDay(String hashSiteId, List<String> visitorSites, LocalDate day, LocalDate oldestPeople)
     {
-        String[] guestKeys = visitorSites.stream()
-                .map(siteId -> visitorsKey(siteId, day, OnlineType.GUEST))
-                .toArray(String[]::new);
-        String[] registeredKeys = visitorSites.stream()
-                .map(siteId -> visitorsKey(siteId, day, OnlineType.REGISTERED))
-                .toArray(String[]::new);
-        String[] allKeys = Stream.concat(Stream.of(guestKeys), Stream.of(registeredKeys))
-                .toArray(String[]::new);
-
-        // PFCOUNT по нескольким ключам считает объединение: вошедший в течение дня гость
-        // и человек, заходивший на два сайта, остаются одним посетителем.
-        long visitors = pfCount(allKeys);
         Map<Object, Object> stats = redisTemplate.opsForHash().entries(dayKey(hashSiteId, day));
+        VisitorCounts people = stats.containsKey(FIELD_VISITORS)
+                ? new VisitorCounts(
+                        parseLong(stats.get(FIELD_VISITORS)),
+                        parseLong(stats.get(FIELD_GUESTS)),
+                        parseLong(stats.get(FIELD_REGISTERED))
+                )
+                : day.isBefore(oldestPeople) ? VisitorCounts.NONE : countPeople(visitorSites, day);
+        // До перехода на точные списки сутки считались в HyperLogLog. В день перехода
+        // заполнены оба счёта, каждый за свою часть суток: берём больший.
+        VisitorCounts counts = people.max(countLegacy(visitorSites, day));
         long samples = parseLong(stats.get(FIELD_SAMPLES));
 
-        if (visitors == 0 && samples == 0)
+        if (counts.visitors() == 0 && samples == 0)
         {
             return HistoryDay.empty(day.toString());
         }
 
-        long guests = pfCount(guestKeys);
-        long registered = pfCount(registeredKeys);
-
         if (samples == 0)
         {
-            return new HistoryDay(day.toString(), visitors, guests, registered, null, null, null, null);
+            return new HistoryDay(
+                    day.toString(), counts.visitors(), counts.guests(), counts.registered(), null, null, null, null
+            );
         }
 
         double average = Math.round(parseLong(stats.get(FIELD_SUM)) * 10.0 / samples) / 10.0;
 
         return new HistoryDay(
                 day.toString(),
-                visitors,
-                guests,
-                registered,
+                counts.visitors(),
+                counts.guests(),
+                counts.registered(),
                 parseLong(stats.get(FIELD_PEAK)),
                 (String) stats.get(FIELD_PEAK_AT),
                 average,
                 parseLong(stats.get(FIELD_PEAK_PLAYERS))
         );
+    }
+
+    private VisitorCounts countPeople(List<String> sites, LocalDate day)
+    {
+        List<String> keys = Stream.concat(
+                sites.stream().map(siteId -> peopleKey(siteId, day, PEOPLE_GUESTS)),
+                sites.stream().map(siteId -> peopleKey(siteId, day, PEOPLE_REGISTERED))
+        ).toList();
+        List<?> result = redisTemplate.execute(COUNT_SCRIPT, keys, String.valueOf(sites.size()));
+
+        if (result == null || result.size() < 3)
+        {
+            return VisitorCounts.NONE;
+        }
+
+        return new VisitorCounts(parseLong(result.get(0)), parseLong(result.get(1)), parseLong(result.get(2)));
+    }
+
+    private VisitorCounts countLegacy(List<String> sites, LocalDate day)
+    {
+        String[] guestKeys = sites.stream()
+                .map(siteId -> legacyVisitorsKey(siteId, day, OnlineType.GUEST))
+                .toArray(String[]::new);
+        String[] registeredKeys = sites.stream()
+                .map(siteId -> legacyVisitorsKey(siteId, day, OnlineType.REGISTERED))
+                .toArray(String[]::new);
+        String[] allKeys = Stream.concat(Stream.of(guestKeys), Stream.of(registeredKeys))
+                .toArray(String[]::new);
+        long visitors = pfCount(allKeys);
+
+        if (visitors == 0)
+        {
+            return VisitorCounts.NONE;
+        }
+
+        return new VisitorCounts(visitors, pfCount(guestKeys), pfCount(registeredKeys));
+    }
+
+    private void finalizeDay(LocalDate day, String ttlSeconds)
+    {
+        List<String> sites = sortedSites();
+        List<String> keys = new ArrayList<>();
+        keys.add(dayKey(ALL_SITES, day));
+        sites.forEach(siteId -> keys.add(dayKey(siteId, day)));
+        sites.forEach(siteId -> keys.add(peopleKey(siteId, day, PEOPLE_GUESTS)));
+        sites.forEach(siteId -> keys.add(peopleKey(siteId, day, PEOPLE_REGISTERED)));
+        sites.forEach(siteId -> keys.add(peopleKey(siteId, day, PEOPLE_LINKED)));
+
+        redisTemplate.execute(FINALIZE_SCRIPT, keys, String.valueOf(sites.size()), ttlSeconds);
     }
 
     private void writeSample(String siteId, LocalDate day, long online, long players, String sampledAt, String ttl)
@@ -227,6 +405,11 @@ public class RedisHistoryService implements HistoryService
         }
     }
 
+    private List<String> sortedSites()
+    {
+        return properties.getAllowedSites().stream().sorted().toList();
+    }
+
     private LocalDate today(Instant now)
     {
         return LocalDate.ofInstant(now, zone());
@@ -247,7 +430,18 @@ public class RedisHistoryService implements HistoryService
         return sitePrefix(siteId) + "history:" + day;
     }
 
-    private String visitorsKey(String siteId, LocalDate day, OnlineType type)
+    /**
+     * Точный список посетителей суток: гости, вошедшие или гостевые ключи вошедших.
+     */
+    private String peopleKey(String siteId, LocalDate day, String list)
+    {
+        return dayKey(siteId, day) + ":people:" + list;
+    }
+
+    /**
+     * HyperLogLog посетителей суток, который вёлся до перехода на точные списки.
+     */
+    private String legacyVisitorsKey(String siteId, LocalDate day, OnlineType type)
     {
         return dayKey(siteId, day) + ":visitors:" + type.name().toLowerCase();
     }
@@ -255,5 +449,15 @@ public class RedisHistoryService implements HistoryService
     private String sitePrefix(String siteId)
     {
         return properties.getRedis().getKeyPrefix() + siteId.trim().toLowerCase() + ":";
+    }
+
+    private record VisitorCounts(long visitors, long guests, long registered)
+    {
+        static final VisitorCounts NONE = new VisitorCounts(0, 0, 0);
+
+        VisitorCounts max(VisitorCounts other)
+        {
+            return (other.visitors() > visitors) ? other : this;
+        }
     }
 }

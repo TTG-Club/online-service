@@ -22,6 +22,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -49,14 +50,31 @@ class RedisHistoryServiceTest
     }
 
     @Test
-    void recordVisitAddsVisitorToDailyCounterOfItsType()
+    void recordVisitAddsVisitorToDailyListOfItsType()
     {
-        service.recordVisit("5E14", OnlineType.GUEST, "guest-1", NOW);
-        service.recordVisit("5e14", OnlineType.REGISTERED, "user-1", NOW);
+        service.recordVisit("5E14", OnlineType.GUEST, "guest-1", null, NOW);
+        service.recordVisit("5e14", OnlineType.REGISTERED, "user-1", "guest-1", NOW);
 
-        verify(hll).add("online:5e14:history:2026-11-16:visitors:guest", "guest-1");
-        verify(hll).add("online:5e14:history:2026-11-16:visitors:registered", "user-1");
-        verify(redisTemplate).expire("online:5e14:history:2026-11-16:visitors:guest", Duration.ofDays(400));
+        List<String> keys = List.of(
+                "online:5e14:history:2026-11-16:people:guest",
+                "online:5e14:history:2026-11-16:people:registered",
+                "online:5e14:history:2026-11-16:people:linked"
+        );
+        String ttl = String.valueOf(Duration.ofDays(3).toSeconds());
+        verify(redisTemplate).execute(RedisHistoryService.VISIT_SCRIPT, keys, "GUEST", "guest-1", "", ttl);
+        verify(redisTemplate).execute(RedisHistoryService.VISIT_SCRIPT, keys, "REGISTERED", "user-1", "guest-1", ttl);
+        verifyNoInteractions(hll);
+    }
+
+    @Test
+    void visitScriptStrikesGuestOutAfterSignIn()
+    {
+        String script = RedisHistoryService.VISIT_SCRIPT.getScriptAsString();
+
+        // Вошедший перестаёт быть гостем, а вышедший из аккаунта гостем за эти сутки не становится.
+        assertTrue(script.contains("redis.call('SREM', KEYS[1], ARGV[3])"));
+        assertTrue(script.contains("redis.call('SADD', KEYS[3], ARGV[3])"));
+        assertTrue(script.contains("redis.call('SISMEMBER', KEYS[3], ARGV[2]) == 0"));
     }
 
     @Test
@@ -80,6 +98,36 @@ class RedisHistoryServiceTest
                 List.of("online:all:history:2026-11-16"), "18", "2", peakAt, ttl);
         // Пик меняется только внутри скрипта: отдельное чтение-запись могли бы перетереть друг друга копии.
         verifyNoInteractions(hash);
+    }
+
+    @Test
+    void sampleMovesPastDaysFromListsIntoDayHashes()
+    {
+        when(value.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(true);
+        when(onlineUserService.getCount(anyString(), any(Duration.class), any(Instant.class)))
+                .thenReturn(new OnlineUserService.OnlineCount(0, 0, 0));
+
+        service.sample(NOW);
+
+        String ttl = String.valueOf(Duration.ofDays(400).toSeconds());
+        for (String day : List.of("2026-11-15", "2026-11-14"))
+        {
+            verify(redisTemplate).execute(RedisHistoryService.FINALIZE_SCRIPT, finalizeKeys(day), "2", ttl);
+        }
+        verify(redisTemplate, never()).execute(
+                eq(RedisHistoryService.FINALIZE_SCRIPT), eq(finalizeKeys("2026-11-16")), any(Object[].class)
+        );
+    }
+
+    @Test
+    void finalizeScriptKeepsFirstResultAndDropsLists()
+    {
+        String script = RedisHistoryService.FINALIZE_SCRIPT.getScriptAsString();
+
+        // Повторный перенос не перетирает итог нулями из уже удалённых списков.
+        assertTrue(script.contains("redis.call('HEXISTS', KEYS[1], 'visitors') == 0"));
+        assertTrue(script.contains("if not hasPeople then"));
+        assertTrue(script.contains("redis.call('DEL', KEYS[i])"));
     }
 
     @Test
@@ -157,7 +205,84 @@ class RedisHistoryServiceTest
     }
 
     @Test
-    void dayCountsVisitorsAndAveragesSamples()
+    void todayCountsVisitorsFromExactLists()
+    {
+        mockCount(List.of(
+                "online:5e14:history:2026-11-16:people:guest",
+                "online:5e14:history:2026-11-16:people:registered"
+        ), "1", List.of(15L, 12L, 3L));
+
+        HistoryService.HistoryDay day = service.getHistory(1, NOW).sites().getFirst().days().getFirst();
+
+        assertEquals(new HistoryService.HistoryDay("2026-11-16", 15L, 12L, 3L, null, null, null, null), day);
+    }
+
+    @Test
+    void totalCountsUnionOfAllSitesLists()
+    {
+        mockCount(List.of(
+                "online:5e14:history:2026-11-16:people:guest",
+                "online:5e24:history:2026-11-16:people:guest",
+                "online:5e14:history:2026-11-16:people:registered",
+                "online:5e24:history:2026-11-16:people:registered"
+        ), "2", List.of(40L, 30L, 10L));
+
+        HistoryService.HistoryDay day = service.getHistory(1, NOW).total().days().getFirst();
+
+        assertEquals(new HistoryService.HistoryDay("2026-11-16", 40L, 30L, 10L, null, null, null, null), day);
+    }
+
+    @Test
+    void pastDayReadsCountsMovedIntoDayHash()
+    {
+        when(hash.entries("online:5e14:history:2026-11-15")).thenReturn(Map.of(
+                "visitors", "20", "guests", "18", "registered", "2"
+        ));
+
+        HistoryService.HistoryDay day = service.getHistory(2, NOW).sites().getFirst().days().getFirst();
+
+        assertEquals(new HistoryService.HistoryDay("2026-11-15", 20L, 18L, 2L, null, null, null, null), day);
+        verify(redisTemplate, never()).execute(
+                eq(RedisHistoryService.COUNT_SCRIPT),
+                eq(List.of(
+                        "online:5e14:history:2026-11-15:people:guest",
+                        "online:5e14:history:2026-11-15:people:registered"
+                )),
+                any(Object[].class)
+        );
+    }
+
+    @Test
+    void daysOlderThanListsDoNotRunCountScript()
+    {
+        service.getHistory(30, NOW);
+
+        // Списки живут трое суток: считаем сегодня и три дня назад - по каждому сайту и по всем вместе.
+        verify(redisTemplate, times(4 * 3)).execute(
+                eq(RedisHistoryService.COUNT_SCRIPT), anyList(), any(Object[].class)
+        );
+    }
+
+    @Test
+    void switchDayTakesLargerOfLegacyAndExactCounts()
+    {
+        String guests = "online:5e14:history:2026-11-16:visitors:guest";
+        String registered = "online:5e14:history:2026-11-16:visitors:registered";
+        when(hll.size(guests, registered)).thenReturn(30L);
+        when(hll.size(guests)).thenReturn(25L);
+        when(hll.size(registered)).thenReturn(6L);
+        mockCount(List.of(
+                "online:5e14:history:2026-11-16:people:guest",
+                "online:5e14:history:2026-11-16:people:registered"
+        ), "1", List.of(12L, 10L, 2L));
+
+        HistoryService.HistoryDay day = service.getHistory(1, NOW).sites().getFirst().days().getFirst();
+
+        assertEquals(new HistoryService.HistoryDay("2026-11-16", 30L, 25L, 6L, null, null, null, null), day);
+    }
+
+    @Test
+    void legacyDayCountsVisitorsAndAveragesSamples()
     {
         String guests = "online:5e14:history:2026-11-16:visitors:guest";
         String registered = "online:5e14:history:2026-11-16:visitors:registered";
@@ -177,7 +302,7 @@ class RedisHistoryServiceTest
     }
 
     @Test
-    void totalCountsUnionOfAllSitesAndReadsCombinedSamples()
+    void legacyTotalCountsUnionOfAllSitesAndReadsCombinedSamples()
     {
         String g24 = "online:5e24:history:2026-11-16:visitors:guest";
         String g14 = "online:5e14:history:2026-11-16:visitors:guest";
@@ -200,5 +325,25 @@ class RedisHistoryServiceTest
         assertEquals(1, service.getHistory(0, NOW).total().days().size());
         assertEquals(365, service.getHistory(1000, NOW).total().days().size());
         assertEquals("2025-11-17", service.getHistory(1000, NOW).from());
+    }
+
+    private static List<String> finalizeKeys(String day)
+    {
+        String p14 = "online:5e14:history:" + day;
+        String p24 = "online:5e24:history:" + day;
+
+        return List.of(
+                "online:all:history:" + day, p14, p24,
+                p14 + ":people:guest", p24 + ":people:guest",
+                p14 + ":people:registered", p24 + ":people:registered",
+                p14 + ":people:linked", p24 + ":people:linked"
+        );
+    }
+
+    @SuppressWarnings("rawtypes")
+    private void mockCount(List<String> keys, String sites, List<Long> result)
+    {
+        when(redisTemplate.execute(eq(RedisHistoryService.COUNT_SCRIPT), eq(keys), eq(sites)))
+                .thenReturn((List) result);
     }
 }
